@@ -1,0 +1,2 @@
+# WebSocket Opus streaming (requires system libopus, e.g. apt install libopus0)
+opuslib-next>=1.1.0
