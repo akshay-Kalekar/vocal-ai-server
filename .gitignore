@@ -3,3 +3,6 @@ venv
 .venv
 **/*.agent
 */__pycache__
+
+
+todo.md
