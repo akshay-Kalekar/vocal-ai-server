@@ -17,7 +17,8 @@ from services.opus_encoder import (
     opus_codec_available,
 )
 from serializers import json_dumps
-import config
+import settings
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,8 @@ router = APIRouter()
 
 def _effective_tts_codec() -> str:
     """Return 'opus' or 'wav' for outbound TTS chunks."""
-    if config.TTS_AUDIO_CODEC != "opus":
+    if settings.TTS_AUDIO_CODEC != "opus":
+
         return "wav"
     if opus_codec_available():
         return "opus"
@@ -50,7 +52,8 @@ async def _stream_tts_wav(
     if not text:
         return
 
-    max_len = getattr(config, "TTS_REPLY_MAX_CHARS", 2000)
+    max_len = getattr(settings, "TTS_REPLY_MAX_CHARS", 2000)
+
     if context == "reply" and len(text) > max_len:
         text = text[:max_len]
 
@@ -104,7 +107,8 @@ async def _stream_tts_wav(
         )
         return
 
-    chunk_size = max(config.TTS_CHUNK_SIZE, 1024)
+    chunk_size = max(settings.TTS_CHUNK_SIZE, 1024)
+
     total_chunks = (len(wav_bytes) + chunk_size - 1) // chunk_size
 
     for idx in range(total_chunks):
@@ -150,7 +154,8 @@ async def _stream_tts_opus(
     if not text:
         return
 
-    max_len = getattr(config, "TTS_REPLY_MAX_CHARS", 2000)
+    max_len = getattr(settings, "TTS_REPLY_MAX_CHARS", 2000)
+
     if context == "reply" and len(text) > max_len:
         text = text[:max_len]
 
@@ -299,27 +304,32 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     # Create or retrieve session
     session_manager.create_session(session_id)
 
-    tts_codec = _effective_tts_codec() if config.TTS_ENABLED else "wav"
+    tts_codec = _effective_tts_codec() if settings.TTS_ENABLED else "wav"
+
 
     await websocket.send_text(
         json_dumps(
             {
                 "type": "session_ready",
                 "session_id": session_id,
-                "tts_enabled": config.TTS_ENABLED,
+                "tts_enabled": settings.TTS_ENABLED,
+
                 "tts_codec": tts_codec,
             }
         )
     )
 
-    if config.TTS_ENABLED:
+    if settings.TTS_ENABLED:
+
         try:
             await _stream_tts_audio(
                 websocket,
                 session_id,
-                config.TTS_WELCOME_TEXT,
+                settings.TTS_WELCOME_TEXT,
+
                 context="welcome",
-                timeout_seconds=config.TTS_WELCOME_TIMEOUT,
+                timeout_seconds=settings.TTS_WELCOME_TIMEOUT,
+
                 codec=tts_codec,
             )
         except Exception as e:
@@ -374,7 +384,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     message_count=updated_session.message_count if updated_session else 0,
                 )
                 will_tts = bool(
-                    config.TTS_ENABLED and full_response.strip()
+                    settings.TTS_ENABLED and full_response.strip()
+
                 )
                 final_payload = {
                     **final_response.model_dump(),
@@ -390,7 +401,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         session_id,
                         full_response,
                         context="reply",
-                        timeout_seconds=config.TTS_REPLY_TIMEOUT,
+                        timeout_seconds=settings.TTS_REPLY_TIMEOUT,
+
                         codec=tts_codec,
                     )
 

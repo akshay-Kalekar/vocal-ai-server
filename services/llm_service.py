@@ -1,15 +1,10 @@
-"""Service for communicating with local LLM via Ollama."""
-
 import json
-import logging
-from typing import AsyncGenerator, List
-
 import httpx
-
-import config
+from typing import AsyncGenerator, List
+import settings
 from models.schemas import Message
 
-logger = logging.getLogger(__name__)
+logger = settings.get_logger(__name__)
 
 
 class LLMService:
@@ -22,10 +17,11 @@ class LLMService:
             base_url: Ollama server URL (e.g., http://localhost:11434)
             model_name: Model name to use (e.g., llama2, mistral, neural-chat)
         """
-        self.base_url = base_url or config.OLLAMA_URL
-        self.model_name = model_name or config.MODEL_NAME
+        self.base_url = base_url or settings.OLLAMA_URL
+        self.model_name = model_name or settings.MODEL_NAME
         self.endpoint = f"{self.base_url}/api/generate"
         logger.info(f"LLMService initialized with model: {self.model_name} at {self.base_url}")
+
 
     def format_conversation_context(self, history: List[Message]) -> str:
         """Format conversation history into a context string for the model.

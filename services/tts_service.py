@@ -1,21 +1,14 @@
-"""Service for generating audio with Qwen TTS."""
+import settings
 
-import asyncio
-import io
-import logging
-import wave
-from typing import Optional, Tuple
+logger = settings.get_logger(__name__)
 
-import config
-
-logger = logging.getLogger(__name__)
 
 
 class TTSService:
     """Lazily loads Qwen TTS model and synthesizes mono16-bit PCM (WAV is optional packaging)."""
 
     def __init__(self):
-        self.enabled = config.TTS_ENABLED
+        self.enabled = settings.TTS_ENABLED
         self._model = None
         self._load_lock = asyncio.Lock()
 
@@ -39,14 +32,14 @@ class TTSService:
                     "bfloat16": torch.bfloat16,
                     "float32": torch.float32,
                 }
-                dtype = dtype_map.get(config.TTS_DTYPE.lower(), torch.bfloat16)
+                dtype = dtype_map.get(settings.TTS_DTYPE.lower(), torch.bfloat16)
 
-                logger.info("Loading Qwen TTS model: %s", config.TTS_MODEL_NAME)
-                preferred_attn = config.TTS_ATTN_IMPL
+                logger.info("Loading Qwen TTS model: %s", settings.TTS_MODEL_NAME)
+                preferred_attn = settings.TTS_ATTN_IMPL
                 try:
                     return Qwen3TTSModel.from_pretrained(
-                        config.TTS_MODEL_NAME,
-                        device_map=config.TTS_DEVICE_MAP,
+                        settings.TTS_MODEL_NAME,
+                        device_map=settings.TTS_DEVICE_MAP,
                         dtype=dtype,
                     )
                 except Exception as exc:
@@ -58,8 +51,8 @@ class TTSService:
                             "FlashAttention2 unavailable; falling back to eager attention."
                         )
                         return Qwen3TTSModel.from_pretrained(
-                            config.TTS_MODEL_NAME,
-                            device_map=config.TTS_DEVICE_MAP,
+                            settings.TTS_MODEL_NAME,
+                            device_map=settings.TTS_DEVICE_MAP,
                             dtype=dtype,
                             attn_implementation="eager",
                         )
@@ -68,6 +61,7 @@ class TTSService:
             self._model = await asyncio.to_thread(_load)
             logger.info("Qwen TTS model loaded")
             return self._model
+
 
     @staticmethod
     def _waveform_to_pcm16_mono(waveform) -> bytes:
@@ -96,14 +90,14 @@ class TTSService:
     ) -> Tuple[bytes, int]:
         """Generate speech; return mono int16 PCM bytes and sample rate (no WAV container)."""
         model = await self._ensure_model()
-        tts_speaker = speaker or config.TTS_SPEAKER
-        tts_language = language or config.TTS_LANGUAGE
-        tts_instruct = instruct if instruct is not None else config.TTS_INSTRUCT
+        tts_speaker = speaker or settings.TTS_SPEAKER
+        tts_language = language or settings.TTS_LANGUAGE
+        tts_instruct = instruct if instruct is not None else settings.TTS_INSTRUCT
 
         def _generate():
             gen_kwargs = {}
-            if config.TTS_GEN_MAX_NEW_TOKENS is not None:
-                gen_kwargs["max_new_tokens"] = config.TTS_GEN_MAX_NEW_TOKENS
+            if settings.TTS_GEN_MAX_NEW_TOKENS is not None:
+                gen_kwargs["max_new_tokens"] = settings.TTS_GEN_MAX_NEW_TOKENS
             logger.info("TTS generate_custom_voice start (text_len=%s)", len(text))
             wavs, sr = model.generate_custom_voice(
                 text=text,
@@ -112,6 +106,7 @@ class TTSService:
                 instruct=tts_instruct,
                 **gen_kwargs,
             )
+
             logger.info("TTS generate_custom_voice done (sample_rate=%s)", sr)
             pcm = self._waveform_to_pcm16_mono(wavs[0])
             return pcm, sr

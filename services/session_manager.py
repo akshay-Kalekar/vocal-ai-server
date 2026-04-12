@@ -1,12 +1,10 @@
-"""Session management for tracking active conversations."""
-
-import logging
+import settings
 from typing import Dict, Optional
 from datetime import datetime
 from models.schemas import Message, SessionData
-import config
 
-logger = logging.getLogger(__name__)
+logger = settings.get_logger(__name__)
+
 
 
 def serialize_session(session: SessionData):
@@ -82,8 +80,9 @@ class SessionManager:
     def cleanup_expired_sessions(self) -> int:
         """Remove sessions that have exceeded the timeout."""
         current_time = datetime.now()
-        timeout_seconds = config.SESSION_TIMEOUT
+        timeout_seconds = settings.SESSION_TIMEOUT
         expired_sessions = []
+
 
         for session_id, session in self.sessions.items():
             elapsed = (current_time - session.last_activity).total_seconds()
