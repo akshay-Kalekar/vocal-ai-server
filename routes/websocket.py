@@ -17,7 +17,12 @@ from services.opus_encoder import (
     opus_codec_available,
 )
 from serializers import json_dumps
+from services.stt_service import stt_service
+import pysbd
+from services.vad_service import vad_service
+
 import settings
+
 
 
 logger = logging.getLogger(__name__)
@@ -52,7 +57,7 @@ async def _stream_tts_wav(
     if not text:
         return
 
-    max_len = getattr(settings, "TTS_REPLY_MAX_CHARS", 2000)
+    max_len = getattr(settings, "TTS_REPLY_MAX_CHARS")
 
     if context == "reply" and len(text) > max_len:
         text = text[:max_len]
@@ -285,155 +290,192 @@ async def _stream_tts_audio(
 
 @router.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    """WebSocket endpoint for chat.
-
-    Args:
-        websocket: WebSocket connection
-        session_id: Unique identifier for the session
-
-    Protocol:
-        Client sends: {"text": "user message"}
-        Server responds: JSON text stream (stream true/false), then if TTS_ENABLED:
-        audio_start / audio_chunk / audio_end with context "welcome" (on connect)
-        or context "reply" (after each assistant message).
-        Audio chunks use format "opus" (preferred) or "wav" per session_ready.tts_codec.
-    """
+    """WebSocket endpoint for real-time voice chat (VAD + STT + LLM + TTS)."""
     await websocket.accept()
-    logger.info(f"WebSocket connection established for session: {session_id}")
+    logger.info(f"WebSocket connection: {session_id}")
 
-    # Create or retrieve session
     session_manager.create_session(session_id)
-
     tts_codec = _effective_tts_codec() if settings.TTS_ENABLED else "wav"
+    segmenter = pysbd.Segmenter(language="en", clean=False)
 
+    await websocket.send_text(json_dumps({
+        "type": "session_ready",
+        "session_id": session_id,
+        "tts_enabled": settings.TTS_ENABLED,
+        "tts_codec": tts_codec,
+    }))
 
-    await websocket.send_text(
-        json_dumps(
-            {
-                "type": "session_ready",
+    # Shared state for communication between audio handler and LLM trigger
+    state = {
+        "is_processing": False,
+        "audio_buffer": bytearray(),
+        "vad_state": "waiting", # waiting, speaking, silence
+        "silence_start": None,
+        "utterance_buffer": bytearray(),
+    }
+
+    # Class for output TTS streaming
+    class TTSStreamer:
+        def __init__(self):
+            self.buffer = ""
+            self.processed_text = ""
+
+        async def push(self, chunk: str):
+            self.buffer += chunk
+            sentences = segmenter.segment(self.buffer)
+            if len(sentences) > 1 or (sentences and any(self.buffer.endswith(p) for p in ".!?")):
+                if not any(self.buffer.endswith(p) for p in ".!?"):
+                    to_process = sentences[:-1]
+                    self.buffer = sentences[-1]
+                else:
+                    to_process = sentences
+                    self.buffer = ""
+                
+                for sentence in to_process:
+                    clean_sent = sentence.strip()
+                    if clean_sent and clean_sent not in self.processed_text:
+                        self.processed_text += clean_sent
+                        await _stream_tts_audio(
+                            websocket, session_id, clean_sent,
+                            context="reply", timeout_seconds=settings.TTS_REPLY_TIMEOUT,
+                            codec=tts_codec
+                        )
+
+        async def finalize(self):
+            if self.buffer.strip():
+                await _stream_tts_audio(
+                    websocket, session_id, self.buffer.strip(),
+                    context="reply", timeout_seconds=settings.TTS_REPLY_TIMEOUT,
+                    codec=tts_codec
+                )
+            self.buffer = ""
+
+    async def trigger_llm_response(user_text: str):
+        state["is_processing"] = True
+        try:
+            session_manager.add_message(session_id, "user", user_text)
+            history = session_manager.get_conversation_history(session_id)
+            
+            tts_streamer = TTSStreamer()
+            response_chunks = []
+            
+            async for chunk in llm_service.generate_response_stream(
+                user_input=user_text,
+                conversation_history=history[:-1],
+            ):
+                response_chunks.append(chunk)
+                full_text = "".join(response_chunks)
+                
+                # Update client with text stream
+                await websocket.send_text(json_dumps({
+                    "type": "agent_response",
+                    "response": full_text,
+                    "session_id": session_id,
+                    "stream": True
+                }))
+                
+                if settings.TTS_ENABLED:
+                    await tts_streamer.push(chunk)
+
+            full_response = "".join(response_chunks)
+            session_manager.add_message(session_id, "assistant", full_response)
+            
+            if settings.TTS_ENABLED:
+                await tts_streamer.finalize()
+
+            await websocket.send_text(json_dumps({
+                "type": "agent_response",
+                "response": full_response,
                 "session_id": session_id,
-                "tts_enabled": settings.TTS_ENABLED,
-
-                "tts_codec": tts_codec,
-            }
-        )
-    )
+                "stream": False,
+                "tts_follows": False 
+            }))
+        finally:
+            state["is_processing"] = False
 
     if settings.TTS_ENABLED:
-
         try:
             await _stream_tts_audio(
-                websocket,
-                session_id,
-                settings.TTS_WELCOME_TEXT,
-
-                context="welcome",
-                timeout_seconds=settings.TTS_WELCOME_TIMEOUT,
-
-                codec=tts_codec,
+                websocket, session_id, settings.TTS_WELCOME_TEXT,
+                context="welcome", timeout_seconds=settings.TTS_WELCOME_TIMEOUT,
+                codec=tts_codec
             )
         except Exception as e:
-            logger.warning("Failed welcome TTS for %s: %s", session_id, str(e))
-            await websocket.send_text(
-                json_dumps(
-                    {
-                        "type": "audio_error",
-                        "session_id": session_id,
-                        "context": "welcome",
-                        "error": str(e),
-                    }
-                )
-            )
+            logger.warning(f"Welcome TTS failed: {e}")
 
     try:
         while True:
-            data = await websocket.receive_text()
-            try:
-                user_message = UserMessage(**json.loads(data))
-                session_manager.add_message(session_id, "user", user_message.text)
-                history = session_manager.get_conversation_history(session_id)
+            # We use receive() to handle both text (JSON) and bytes (Audio)
+            message = await websocket.receive()
+            
+            if "text" in message:
+                data = json.loads(message["text"])
+                if data.get("type") == "ping":
+                    await websocket.send_text(json_dumps({"type": "pong"}))
+                    continue
+                
+                user_text = data.get("text", "")
+                if user_text and not state["is_processing"]:
+                    asyncio.create_task(trigger_llm_response(user_text))
 
-                # Stream response from LLM
-                response_chunks = []
-                async for chunk in llm_service.generate_response_stream(
-                    user_input=user_message.text,
-                    conversation_history=history[:-1],
-                ):
-                    response_chunks.append(chunk)
-                    partial_response = "".join(response_chunks)
-                    updated_session = session_manager.get_session(session_id)
-                    agent_response = AgentResponse(
-                        response=partial_response,
-                        session_id=session_id,
-                        message_count=updated_session.message_count if updated_session else 0,
-                    )
-                    response_payload = {
-                        **agent_response.model_dump(),
-                        "session": serialize_session(updated_session) if updated_session else None,
-                        "stream": True,
-                    }
-                    await websocket.send_text(json_dumps(response_payload))
+            elif "bytes" in message:
+                if state["is_processing"]:
+                    continue
+                
+                audio_chunk = message["bytes"]
+                state["audio_buffer"].extend(audio_chunk)
 
-                full_response = "".join(response_chunks)
-                session_manager.add_message(session_id, "assistant", full_response)
-                updated_session = session_manager.get_session(session_id)
-
-                final_response = AgentResponse(
-                    response=full_response,
-                    session_id=session_id,
-                    message_count=updated_session.message_count if updated_session else 0,
-                )
-                will_tts = bool(
-                    settings.TTS_ENABLED and full_response.strip()
-
-                )
-                final_payload = {
-                    **final_response.model_dump(),
-                    "session": serialize_session(updated_session) if updated_session else None,
-                    "stream": False,
-                    "tts_follows": will_tts,
-                }
-                await websocket.send_text(json_dumps(final_payload))
-
-                if will_tts:
-                    await _stream_tts_audio(
-                        websocket,
-                        session_id,
-                        full_response,
-                        context="reply",
-                        timeout_seconds=settings.TTS_REPLY_TIMEOUT,
-
-                        codec=tts_codec,
-                    )
-
-            except json.JSONDecodeError:
-                error = ErrorResponse(
-                    error='Invalid JSON format. Expected: {"text": "your message"}',
-                    session_id=session_id,
-                )
-                await websocket.send_text(json_dumps(error.model_dump()))
-                logger.warning(f"Invalid JSON received from {session_id}")
-
-            except ValueError as e:
-                error = ErrorResponse(
-                    error=f"Invalid message format: {str(e)}",
-                    session_id=session_id,
-                )
-                await websocket.send_text(json_dumps(error.model_dump()))
-                logger.warning(f"Validation error for {session_id}: {str(e)}")
-
-            except Exception as e:
-                error_msg = f"Error processing message: {str(e)}"
-                logger.error(f"Session {session_id} error: {error_msg}")
-                error = ErrorResponse(
-                    error=error_msg,
-                    session_id=session_id,
-                )
-                await websocket.send_text(json_dumps(error.model_dump()))
+                # webrtcvad expects 10ms, 20ms, or 30ms frames.
+                # Assuming 16kHz mono (STT standard), 30ms is 480 samples = 960 bytes.
+                frame_size = 960
+                while len(state["audio_buffer"]) >= frame_size:
+                    frame = state["audio_buffer"][:frame_size]
+                    del state["audio_buffer"][:frame_size]
+                    
+                    is_speech = vad_service.is_speech(frame, 16000)
+                    
+                    current_time = asyncio.get_event_loop().time()
+                    
+                    if is_speech:
+                        if state["vad_state"] == "waiting":
+                            logger.info("Speech started")
+                            state["utterance_buffer"] = bytearray()
+                        state["vad_state"] = "speaking"
+                        state["silence_start"] = None
+                        state["utterance_buffer"].extend(frame)
+                    else:
+                        if state["vad_state"] == "speaking":
+                            state["vad_state"] = "silence"
+                            state["silence_start"] = current_time
+                        
+                        if state["vad_state"] == "silence":
+                            state["utterance_buffer"].extend(frame)
+                            if current_time - state["silence_start"] > settings.STT_SILENCE_THRESHOLD:
+                                logger.info("Silence detected, triggering STT")
+                                utterance = bytes(state["utterance_buffer"])
+                                state["utterance_buffer"] = bytearray()
+                                state["vad_state"] = "waiting"
+                                
+                                # Process with STT
+                                if settings.STT_ENABLED:
+                                    try:
+                                        text = await stt_service.transcribe(utterance)
+                                        if text:
+                                            logger.info(f"User: {text}")
+                                            await websocket.send_text(json_dumps({
+                                                "type": "user_speech",
+                                                "text": text,
+                                                "session_id": session_id
+                                            }))
+                                            asyncio.create_task(trigger_llm_response(text))
+                                    except Exception as e:
+                                        logger.error(f"STT Error: {e}")
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for session: {session_id}")
+        logger.info(f"Disconnect: {session_id}")
         session_manager.close_session(session_id)
     except Exception as e:
-        logger.error(f"Unexpected error in WebSocket for session {session_id}: {str(e)}")
+        logger.error(f"WS Error {session_id}: {e}")
         session_manager.close_session(session_id)
+
+

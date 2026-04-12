@@ -10,15 +10,15 @@ logger = settings.get_logger(__name__)
 class LLMService:
     """Handles interactions with local LLM running on Ollama."""
 
-    def __init__(self, base_url: str = None, model_name: str = None):
+    def __init__(self):
         """Initialize the LLM service.
 
         Args:
             base_url: Ollama server URL (e.g., http://localhost:11434)
             model_name: Model name to use (e.g., llama2, mistral, neural-chat)
         """
-        self.base_url = base_url or settings.OLLAMA_URL
-        self.model_name = model_name or settings.MODEL_NAME
+        self.base_url = settings.OLLAMA_URL
+        self.model_name = settings.MODEL_NAME
         self.endpoint = f"{self.base_url}/api/generate"
         logger.info(f"LLMService initialized with model: {self.model_name} at {self.base_url}")
 

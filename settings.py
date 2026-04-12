@@ -54,6 +54,14 @@ _tok = os.getenv("TTS_GEN_MAX_NEW_TOKENS", "").strip()
 TTS_GEN_MAX_NEW_TOKENS = int(_tok) if _tok else None
 TTS_AUDIO_CODEC = os.getenv("TTS_AUDIO_CODEC", "opus").strip().lower()
 
+# --- STT Configuration ---
+STT_ENABLED = os.getenv("STT_ENABLED", "true").lower() == "true"
+STT_MODEL_NAME = os.getenv("STT_MODEL_NAME", "base")
+STT_DEVICE = os.getenv("STT_DEVICE", "auto")
+STT_COMPUTE_TYPE = os.getenv("STT_COMPUTE_TYPE", "default")
+STT_SILENCE_THRESHOLD = float(os.getenv("STT_SILENCE_THRESHOLD", "0.8"))
+
+
 # --- API Configuration ---
 API_TITLE = "Low Cost Voice Agent"
 API_VERSION = "0.1.0"

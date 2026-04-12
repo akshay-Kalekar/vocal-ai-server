@@ -1,3 +1,7 @@
+import asyncio
+import io
+import wave
+from typing import Optional, Tuple
 import settings
 
 logger = settings.get_logger(__name__)
@@ -84,15 +88,12 @@ class TTSService:
     async def synthesize_pcm(
         self,
         text: str,
-        speaker: Optional[str] = None,
-        language: Optional[str] = None,
-        instruct: Optional[str] = None,
     ) -> Tuple[bytes, int]:
         """Generate speech; return mono int16 PCM bytes and sample rate (no WAV container)."""
         model = await self._ensure_model()
-        tts_speaker = speaker or settings.TTS_SPEAKER
-        tts_language = language or settings.TTS_LANGUAGE
-        tts_instruct = instruct if instruct is not None else settings.TTS_INSTRUCT
+        tts_speaker = settings.TTS_SPEAKER
+        tts_language = settings.TTS_LANGUAGE
+        tts_instruct = settings.TTS_INSTRUCT
 
         def _generate():
             gen_kwargs = {}
