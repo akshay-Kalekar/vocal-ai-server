@@ -15,6 +15,7 @@ class TTSService:
         self.enabled = settings.TTS_ENABLED
         self._model = None
         self._load_lock = asyncio.Lock()
+        self._gen_lock = asyncio.Lock()
 
     async def _ensure_model(self):
         if self._model is not None:
@@ -112,7 +113,8 @@ class TTSService:
             pcm = self._waveform_to_pcm16_mono(wavs[0])
             return pcm, sr
 
-        return await asyncio.to_thread(_generate)
+        async with self._gen_lock:
+            return await asyncio.to_thread(_generate)
 
     async def synthesize_wav(
         self,
