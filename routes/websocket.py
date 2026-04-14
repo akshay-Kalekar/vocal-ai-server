@@ -46,7 +46,6 @@ async def _send_safely(websocket: WebSocket, data: str):
 def _effective_tts_codec() -> str:
     """Return 'opus' or 'wav' for outbound TTS chunks."""
     if settings.TTS_AUDIO_CODEC != "opus":
-
         return "wav"
     if opus_codec_available():
         return "opus"
@@ -81,7 +80,6 @@ async def _stream_tts_wav(
         "text": text[:500] if context == "welcome" else text[:300],
     }))
 
-    sample_rate = 24000 # Default fallback
     try:
         # 2. Synthesize
         pcm, sample_rate = await asyncio.wait_for(

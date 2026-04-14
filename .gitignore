@@ -2,7 +2,8 @@
 venv
 .venv
 **/*.agent
-*/__pycache__
+**/__pycache__
+piper
 
 
 todo.md

@@ -9,7 +9,7 @@ FastAPI service that powers a text (and optional voice) assistant: it streams re
 1. **HTTP** — The app exposes a small REST surface (`/`, `/health`) for sanity checks and LLM reachability.
 2. **WebSocket** — All chat traffic goes through **`/ws/{session_id}`**. The `session_id` in the URL is the conversation key; the server creates or resumes that session when the socket connects.
 3. **LLM** — Each user message is appended to the session, then the server calls Ollama’s **`/api/generate`** and streams tokens. You receive many JSON frames with `stream: true` and a growing `response` field, then one final frame with `stream: false`.
-4. **TTS (optional)** — If `TTS_ENABLED=true`, the server runs **Qwen TTS** on the assistant text: it produces **mono PCM**, then either wraps **WAV** or encodes **Opus** for the wire. The utterance is **fully synthesized before** `audio_chunk` frames are sent (not streamed sample-by-sample from the TTS model).
+4. **TTS (optional)** — If `TTS_ENABLED=true`, the server runs **[Piper](https://github.com/rhasspy/piper)** (ONNX, CPU-friendly) via the `piper` CLI: it writes **mono s16le PCM** from `--output_raw`, then either wraps **WAV** for the WebSocket or encodes **Opus**. Piper is invoked **once per utterance**; audio chunks are sent after that run finishes.
 5. **Welcome audio** — With TTS on, the server may send a **welcome** utterance (`context: "welcome"`) right after `session_ready`, before you send any user text.
 
 ---
@@ -28,7 +28,7 @@ FastAPI service that powers a text (and optional voice) assistant: it streams re
 
    For **Opus** TTS over the socket (`TTS_AUDIO_CODEC=opus`, default): also `pip install opuslib-next` and install **libopus** on the system (e.g. `libopus0`).
 
-   For **TTS**: install the **Qwen TTS** stack your project uses (`qwen_tts`, PyTorch, etc.) per your environment.
+   For **TTS**: install the **Piper** binary from [Piper releases](https://github.com/rhasspy/piper/releases) (or your distro). Download a voice **`.onnx`** plus the matching **`.onnx.json`** (same basename). Set `PIPER_MODEL_PATH` in `.env` to the `.onnx` file. Optional: `PIPER_EXECUTABLE` if `piper` is not on `PATH`; `PIPER_VOICE_JSON` if the JSON is not beside the model; `PIPER_EXTRA_ARGS` for flags like `--noise_scale 0.667` (see `piper --help`).
 
 4. Start the API:
 
@@ -145,7 +145,7 @@ For both, frames are JSON text messages with a `type` field:
 1. **`audio_start`** — `context`: `"welcome"` | `"reply"`, `format`: `"opus"` | `"wav"`, optional `sample_rate`, `opus_frame_samples` (Opus), short `text` preview.
 2. **`audio_chunk`** — Base64 in **`data`**, ordered by **`sequence`** (0 … `total_chunks` − 1).
    - **WAV**: concatenate decoded bytes to rebuild a full `.wav` file; `sample_rate` is the PCM rate inside the WAV.
-   - **Opus**: each chunk is one **Opus packet**; decode at **48 kHz** mono with **960 samples** (20 ms) per packet (`opus_frame_samples`). The server resamples TTS PCM to 48 kHz before encoding.
+   - **Opus**: each chunk is one **Opus packet**; decode at **48 kHz** mono with **960 samples** (20 ms) per packet (`opus_frame_samples`). The server resamples Piper’s PCM (voice-dependent rate, e.g. 22.05 kHz) to 48 kHz before encoding.
 3. **`audio_end`** — Same `format` / `sample_rate` as chunks; end of this utterance.
 4. **`audio_error`** — TTS failed; `context` and `error` string.
 
@@ -163,7 +163,7 @@ Check **`session_ready.tts_codec`** so the UI knows whether to treat chunks as W
 See [`.env.example`](./.env.example) for variables. Important groups:
 
 - **LLM**: `OLLAMA_URL`, `MODEL_NAME`
-- **TTS**: `TTS_ENABLED`, `TTS_MODEL_NAME`, timeouts, `TTS_AUDIO_CODEC` (`opus` | `wav`), etc.
+- **TTS**: `TTS_ENABLED`, `PIPER_MODEL_PATH`, `PIPER_EXECUTABLE`, `PIPER_VOICE_JSON`, `PIPER_EXTRA_ARGS`, welcome/reply timeouts, `TTS_REPLY_MAX_CHARS`, `TTS_AUDIO_CODEC` (`opus` | `wav`)
 - **Server**: `LOG_LEVEL`, `SESSION_TIMEOUT`
 
 ---
@@ -173,21 +173,22 @@ See [`.env.example`](./.env.example) for variables. Important groups:
 | Path | Role |
 |------|------|
 | `main.py` | FastAPI app, CORS, lifespan hooks |
-| `config.py` | Environment-based settings |
+| `settings.py` | Environment-based settings |
 | `routes/websocket.py` | Chat + TTS streaming |
 | `services/llm_service.py` | Ollama streaming client |
-| `services/tts_service.py` | Qwen TTS → PCM (+ optional WAV wrap) |
+| `services/tts_service.py` | Piper CLI → PCM (+ optional WAV wrap) |
 | `services/opus_encoder.py` | PCM → Opus packets |
 | `services/session_manager.py` | Per-session history |
 | `models/schemas.py` | Pydantic message types |
 | `test_client.py` | CLI WebSocket test (text + optional TTS save) |
+| `test_piper.py` | Smoke-test Piper with current `.env` |
 
 ---
 
 ## Troubleshooting
 
 - **`/health` shows `llm_available: false`** — Ollama not running or wrong `OLLAMA_URL`.
-- **No audio** — `TTS_ENABLED` must be `true`; Qwen TTS dependencies must load; for Opus, `libopus` + `opuslib-next` must be available.
+- **No audio / “Piper TTS is enabled but not ready”** — The startup log now includes the **exact reason** (e.g. empty `PIPER_MODEL_PATH`, `piper` not on `PATH`, file not found). Fix: set `PIPER_MODEL_PATH` to an existing `.onnx`, install Piper and ensure `which piper` works (or set `PIPER_EXECUTABLE` to the full binary path). Voices need the paired `.onnx.json` beside the model unless you set `PIPER_VOICE_JSON`. Piper also expects **`espeak-ng-data`** next to the `piper` binary for many voices—use the release tarball layout or copy that folder beside your binary.
 - **WebSocket fails from the browser** — Use `wss://` when the page is served over HTTPS; ensure the API host/port and firewall allow WebSocket upgrades.
 
 For a step-by-step local setup (Ollama, env file, `uvicorn`), you can still use [WEBSOCKET_SETUP.md](./WEBSOCKET_SETUP.md); this README is the canonical description of the **current** protocol and frontend integration.

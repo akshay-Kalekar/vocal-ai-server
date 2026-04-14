@@ -27,10 +27,17 @@ async def lifespan(app: FastAPI):
         logger.warning("⚠ LLM is not reachable. Make sure Ollama is running.")
 
     if settings.TTS_ENABLED:
-        if await tts_service.check_connection():
-            logger.info("✓ Qwen TTS is available and ready")
+        tts_ok, tts_err = await tts_service.verify_ready()
+        if tts_ok:
+            logger.info("✓ Piper TTS is available and ready")
         else:
-            logger.warning("⚠ Qwen TTS is enabled but not reachable.")
+            logger.warning(
+                "⚠ Piper TTS is enabled but not ready: %s "
+                "(install Piper from https://github.com/rhasspy/piper/releases, "
+                "set PIPER_MODEL_PATH to your .onnx file, and keep the matching "
+                ".onnx.json beside it or set PIPER_VOICE_JSON)",
+                tts_err,
+            )
 
     yield
 

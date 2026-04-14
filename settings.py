@@ -32,26 +32,23 @@ def get_logger(name: str):
 
 logger = get_logger(__name__)
 
-# --- Qwen TTS Configuration ---
+# --- Piper TTS (CPU-friendly; requires `piper` binary + .onnx voice) ---
+# Voices: https://github.com/rhasspy/piper/releases (download .onnx + matching .onnx.json)
 TTS_ENABLED = os.getenv("TTS_ENABLED", "false").lower() == "true"
-TTS_MODEL_NAME = os.getenv("TTS_MODEL_NAME", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
-TTS_SPEAKER = os.getenv("TTS_SPEAKER", "Ryan")
-TTS_LANGUAGE = os.getenv("TTS_LANGUAGE", "English")
-TTS_INSTRUCT = os.getenv("TTS_INSTRUCT", "")
+PIPER_EXECUTABLE = os.getenv("PIPER_EXECUTABLE", "piper")
+PIPER_MODEL_PATH = os.getenv("PIPER_MODEL_PATH", "").strip()
+# Optional: explicit path to voice JSON (default: {PIPER_MODEL_PATH}.json)
+PIPER_VOICE_JSON = os.getenv("PIPER_VOICE_JSON", "").strip()
+# Extra CLI args, e.g. '--noise-scale 0.667 --length-scale 1.0'
+PIPER_EXTRA_ARGS = os.getenv("PIPER_EXTRA_ARGS", "")
 TTS_WELCOME_TEXT = os.getenv(
     "TTS_WELCOME_TEXT",
     "Welcome. You are connected to the low cost voice agent.",
 )
-TTS_DEVICE_MAP = os.getenv("TTS_DEVICE_MAP", "cpu")
-TTS_DTYPE = os.getenv("TTS_DTYPE", "float32")
-TTS_ATTN_IMPL = os.getenv("TTS_ATTN_IMPL", "flash_attention_2")
 TTS_CHUNK_SIZE = int(os.getenv("TTS_CHUNK_SIZE", "8192"))
 TTS_WELCOME_TIMEOUT = int(os.getenv("TTS_WELCOME_TIMEOUT", "600"))
 TTS_REPLY_TIMEOUT = int(os.getenv("TTS_REPLY_TIMEOUT", str(TTS_WELCOME_TIMEOUT)))
 TTS_REPLY_MAX_CHARS = int(os.getenv("TTS_REPLY_MAX_CHARS", "2000"))
-
-_tok = os.getenv("TTS_GEN_MAX_NEW_TOKENS", "").strip()
-TTS_GEN_MAX_NEW_TOKENS = int(_tok) if _tok else None
 TTS_AUDIO_CODEC = os.getenv("TTS_AUDIO_CODEC", "opus").strip().lower()
 
 # --- STT Configuration ---
