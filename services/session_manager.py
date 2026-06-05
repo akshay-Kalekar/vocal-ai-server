@@ -1,10 +1,12 @@
-import settings
+"""Session management for tracking active conversations."""
+
+import logging
 from typing import Dict, Optional
 from datetime import datetime
 from models.schemas import Message, SessionData
+import config
 
-logger = settings.get_logger(__name__)
-
+logger = logging.getLogger(__name__)
 
 
 def serialize_session(session: SessionData):
@@ -35,9 +37,13 @@ class SessionManager:
     def create_session(self, session_id: str) -> SessionData:
         """Create a new session."""
         if session_id in self.sessions:
+            logger.warning(f"Session {session_id} already exists, returning existing session")
             return self.sessions[session_id]
 
         session = SessionData(session_id=session_id)
+        # Serialize before storing (optional, for logging or validation)
+        serialized = serialize_session(session)
+        logger.debug(f"Serialized new session: {serialized}")
         self.sessions[session_id] = session
         logger.info(f"Created new session: {session_id}")
         return session
@@ -53,13 +59,15 @@ class SessionManager:
         """Add a message to the session's conversation history."""
         session = self.get_session(session_id)
         if not session:
-            logger.warning(f"Message dropped because session {session_id} was not found")
+            logger.warning(f"Session {session_id} not found when adding message")
             return False
 
         message = Message(role=role, content=content)
         session.conversation_history.append(message)
         session.message_count += 1
         session.last_activity = datetime.now()
+        logger.debug(f"Serialized session after message: {serialize_session(session)}")
+        logger.debug(f"Added {role} message to session {session_id}")
         return True
 
     def get_conversation_history(self, session_id: str) -> list:
@@ -80,9 +88,8 @@ class SessionManager:
     def cleanup_expired_sessions(self) -> int:
         """Remove sessions that have exceeded the timeout."""
         current_time = datetime.now()
-        timeout_seconds = settings.SESSION_TIMEOUT
+        timeout_seconds = config.SESSION_TIMEOUT
         expired_sessions = []
-
 
         for session_id, session in self.sessions.items():
             elapsed = (current_time - session.last_activity).total_seconds()

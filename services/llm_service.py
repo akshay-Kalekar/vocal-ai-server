@@ -1,4 +1,5 @@
 import json
+import re
 import httpx
 from typing import AsyncGenerator, List
 import settings
@@ -40,6 +41,36 @@ class LLMService:
                 context += f"Assistant: {msg.content}\n"
         return context
 
+    # System instruction sent to Ollama on every request.
+    # Keeps output plain-text so Piper TTS doesn't speak raw symbols.
+    _SYSTEM_PROMPT: str = (
+        "You are a helpful voice assistant. "
+        "Respond in plain conversational sentences only. "
+        "Do NOT use markdown, bullet points, numbered lists, asterisks, "
+        "underscores, hash symbols, backticks, or any other formatting symbols. "
+        "Never highlight or bold words. Write as if speaking aloud."
+    )
+
+    # Regex that removes common markdown / TTS-hostile symbols from a string.
+    _MD_PATTERN: re.Pattern = re.compile(
+        r"(\*{1,3}|_{1,3}|`{1,3}|#{1,6}\s?|~{2}|\\|>\s?|[-*+]\s(?=\S)|\d+\.\s(?=\S))"
+    )
+
+    @classmethod
+    def _clean_response(cls, text: str) -> str:
+        """Strip markdown / formatting symbols that Piper TTS would read literally.
+
+        Handles: **bold**, *italic*, ***bold-italic***, __underline__,
+        `code`, ```blocks```, # headings, > blockquotes, - / * / + bullets,
+        1. numbered lists, ~~strikethrough~~.
+        """
+        # Remove block-level markdown leaders (headings, blockquotes, bullets)
+        cleaned = cls._MD_PATTERN.sub("", text)
+        # Collapse excess whitespace left behind by removed symbols
+        cleaned = re.sub(r" {2,}", " ", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
     def _build_prompt(self, user_input: str, conversation_history: List[Message]) -> str:
         """Build a bounded prompt to avoid runaway token usage."""
         trimmed_history = conversation_history[-4:]
@@ -54,6 +85,7 @@ class LLMService:
         payload = {
             "model": self.model_name,
             "prompt": prompt,
+            "system": self._SYSTEM_PROMPT,
             "num_predict": 80,
             "keep_alive": "10m",
             "stream": True,
@@ -72,7 +104,7 @@ class LLMService:
                         data = json.loads(line)
                         chunk = data.get("response", "")
                         if chunk:
-                            yield chunk
+                            yield chunk  # raw text — callers decide what to clean
                         if data.get("done"):
                             break
         except Exception as e:
@@ -80,7 +112,7 @@ class LLMService:
             raise
 
     async def generate_response(self, user_input: str, conversation_history: List[Message]) -> str:
-        """Return a full response assembled from streamed chunks."""
+        """Return a full response assembled from streamed chunks (raw, no cleaning)."""
         chunks: List[str] = []
         async for chunk in self.generate_response_stream(user_input, conversation_history):
             chunks.append(chunk)

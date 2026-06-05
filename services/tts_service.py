@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import settings
+from services.llm_service import LLMService
 
 logger = settings.get_logger(__name__)
 
@@ -24,10 +25,14 @@ def _voice_json_path(model_path: str) -> Path:
 
 
 def _normalize_piper_text(text: str) -> str:
-    """Piper reads stdin line-oriented; collapse newlines so the full utterance is spoken."""
+    """Clean markdown symbols and collapse newlines before sending to Piper TTS."""
     text = (text or "").strip()
     if not text:
         return text
+    # Strip asterisks, hashes, bullets, backticks and other markdown symbols
+    # so Piper doesn't speak them aloud.
+    text = LLMService._clean_response(text)
+    # Piper reads stdin line-oriented; collapse any remaining newlines.
     text = re.sub(r"[\r\n]+", " ", text)
     return text
 
